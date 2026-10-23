@@ -59,6 +59,7 @@ void luaC_validate(lua_State* L);
 LUAU_FASTFLAG(DebugLuauAbortingChecks)
 LUAU_FASTFLAG(LuauBytecodeFold)
 LUAU_FASTFLAG(LuauBytecodeSlotAlloc)
+LUAU_FASTFLAG(LuauCodegenA64BitlrotateSelf)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTINT(CodegenHeuristicsInstructionLimit)
 LUAU_FASTFLAG(LuauIntegerLibrary)
@@ -67,27 +68,24 @@ LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuauCodegenBufferInteger)
 LUAU_FASTFLAG(LuauCodegenInteger3)
 LUAU_FASTFLAG(LuauIntegerFastcalls)
+LUAU_FASTFLAG(LuauCodegenA64ReloadLargeConstOffset)
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
 LUAU_FASTFLAG(DebugLuauUserDefinedClassesRuntime)
-LUAU_FASTFLAG(LuauCompileEmitVectorDouble)
 LUAU_FASTFLAG(LuauCompileNoFoldVectorEqW)
 LUAU_FASTFLAG(LuauGcTraceUdata)
 LUAU_DYNAMIC_FASTFLAG(LuauGcHeapShrinkFix)
-LUAU_FASTFLAG(LuauFastpcallInterrupt)
 LUAU_FASTFLAG(LuauPcallErrorContinuationReentry)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuauBytecodeCostModel)
-LUAU_FASTFLAG(LuauNewPointerEncode)
-LUAU_FASTFLAG(LuauSandboxFreezesVectorMetatable)
 LUAU_FASTFLAG(LuauExperimentalIfLocalSyntax)
 LUAU_FASTFLAG(LuauSandboxFreezesVectorMetatable)
 LUAU_FASTFLAG(LuauBufferCage)
 LUAU_FASTFLAG(LuauCoroutineFinally)
 LUAU_FASTFLAG(LuauCoroutineFinallyAnalysis)
+LUAU_FASTFLAG(LuauCodegenDseTrackTagInvalidation)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauCompileCallFbRemap)
 LUAU_DYNAMIC_FASTFLAG(LuauTableRobustOom)
-LUAU_DYNAMIC_FASTFLAG(LuauSplitTableLookups)
 LUAU_DYNAMIC_FASTFLAG(LuauTableFindImprovement)
 LUAU_FASTFLAG(FixMathNoisePrecision)
 
@@ -1282,7 +1280,6 @@ TEST_CASE("FloatIntCast")
 
     for (int mode = 0; mode < 3; ++mode)
     {
-        ScopedFastFlag splitTableLookups{DFFlag::LuauSplitTableLookups, mode != 0};
         ScopedFastFlag tableFindImprovement{DFFlag::LuauTableFindImprovement, mode == 2};
         runConformance("floatintcast.luau");
     }
@@ -1737,6 +1734,8 @@ TEST_CASE("GC")
 
 TEST_CASE("Bitwise")
 {
+    ScopedFastFlag luauCodegenA64BitlrotateSelf{FFlag::LuauCodegenA64BitlrotateSelf, true};
+
     runConformance("bitwise.luau");
 }
 
@@ -2149,7 +2148,6 @@ TEST_CASE("CYield")
 
 TEST_CASE("Vector")
 {
-    ScopedFastFlag luauCompileEmitVectorDouble{FFlag::LuauCompileEmitVectorDouble, true};
     ScopedFastFlag luauCompileNoFoldVectorEqW{FFlag::LuauCompileNoFoldVectorEqW, true};
 
     lua_CompileOptions copts = defaultOptions();
@@ -2208,8 +2206,6 @@ TEST_CASE("Vector")
 
 TEST_CASE("VectorLibrary")
 {
-    ScopedFastFlag luauCompileEmitVectorDouble{FFlag::LuauCompileEmitVectorDouble, true};
-
     lua_CompileOptions copts = defaultOptions();
 
     SUBCASE("O0")
@@ -3493,8 +3489,6 @@ TEST_CASE("ApiEncode")
         CHECK(a == b);
     }
 
-    ScopedFastFlag luauNewPointerEncode{FFlag::LuauNewPointerEncode, true};
-
     // A few exact value tests
     if (sizeof(void*) == 8)
     {
@@ -3895,8 +3889,22 @@ foo()
 
 class HeapClass
     public value
+    private _hidden
+
+    public function __init(self, val)
+        self.value = val
+        self._hidden = val
+    end
+
+    private function _tag(self)
+        return self._hidden
+    end
+
+    function tag(self)
+        return self:_tag()
+    end
 end
-local object = HeapClass { value = x }
+local object = HeapClass(x)
 
 return f, object
 )";
@@ -3948,11 +3956,14 @@ return f, object
                 if (tt == LUA_TUSERDATA)
                     CHECK(sv == "u42");
                 else if (tt == LUA_TPROTO)
-                    CHECK((sv == "proto unnamed:1 =GCDump" || sv == "proto foo:7 =GCDump" || sv == "proto f:4 =GCDump"));
+                    CHECK(
+                        (sv == "proto unnamed:1 =GCDump" || sv == "proto foo:7 =GCDump" || sv == "proto f:4 =GCDump" ||
+                         sv == "proto __init:17 =GCDump" || sv == "proto _tag:22 =GCDump" || sv == "proto tag:26 =GCDump")
+                    );
                 else if (tt == LUA_TFUNCTION)
                     CHECK(
-                        (sv == "test" || sv == "unnamed:1 =GCDump" || sv == "foo:7 =GCDump" || sv == "f:4 =GCDump" ||
-                         sv == "luaR_defaultcreateobject" || sv == "luaR_constructobject")
+                        (sv == "test" || sv == "unnamed:1 =GCDump" || sv == "foo:7 =GCDump" || sv == "f:4 =GCDump" || sv == "__init:17 =GCDump" ||
+                         sv == "_tag:22 =GCDump" || sv == "tag:26 =GCDump" || sv == "luaR_defaultcreateobject" || sv == "luaR_constructobject")
                     );
                 else if (tt == LUA_TTHREAD)
                     CHECK(sv == "thread at unnamed:1 =GCDump");
@@ -4003,8 +4014,6 @@ return f, object
 
 TEST_CASE("Interrupt")
 {
-    ScopedFastFlag luauFastpcallInterrupt{FFlag::LuauFastpcallInterrupt, true};
-
     lua_CompileOptions copts = defaultOptions();
     copts.optimizationLevel = 1; // disable loop unrolling to get fixed expected hit results
 
@@ -4831,6 +4840,9 @@ TEST_CASE("SafeEnv")
 
 TEST_CASE("Native")
 {
+    ScopedFastFlag reloadLargeConstOffset{FFlag::LuauCodegenA64ReloadLargeConstOffset, true};
+    ScopedFastFlag luauCodegenDseTrackTagInvalidation{FFlag::LuauCodegenDseTrackTagInvalidation, true};
+
     // This tests requires code to run natively, otherwise all 'is_native' checks will fail
     if (!codegen || !luau_codegen_supported())
         return;
