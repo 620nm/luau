@@ -5158,6 +5158,13 @@ static std::string getRecordedFastPathCounters(lua_State* L, const char* global)
     return context.log;
 }
 
+TEST_CASE("RuntimeFeedbackNonFiniteNumericFor")
+{
+    ScopedFastFlag luauRuntimeFeedback{FFlag::LuauRuntimeFeedback, true};
+
+    runConformance("runtimefeedback.luau");
+}
+
 TEST_CASE("Promotion")
 {
     ScopedFastFlag luauRuntimeFeedback{FFlag::LuauRuntimeFeedback, true};

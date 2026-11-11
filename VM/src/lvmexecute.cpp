@@ -239,6 +239,9 @@ static LUAU_NOINLINE void luau_setupcci(lua_State* L, int nresults, StkId fun)
 // Batch addition of loop execution counter increments
 static void luau_addexeccount(Proto* p, double count)
 {
+    if (!(count > 0))
+        return;
+
     // Leaving room for regular counter hits to not overflow too fast
     uint32_t space = UINT32_MAX / 4 - p->execcount;
 
