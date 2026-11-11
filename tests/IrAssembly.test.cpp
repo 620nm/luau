@@ -9,9 +9,6 @@
 
 #include <regex>
 
-LUAU_FASTFLAG(LuauCodegenX64IntSpillRestore)
-LUAU_FASTFLAG(LuauCodegenExitSyncUpdate)
-LUAU_FASTFLAG(LuauCodegenScopedSpillKeepLazy)
 LUAU_FASTFLAG(LuauCodegenImprovedExitSync)
 
 using namespace Luau::CodeGen;
@@ -798,8 +795,6 @@ bb_0:
 
 TEST_CASE_FIXTURE(IrAssemblyFixture, "IntStackSpillIgnoresConvertedRestoreLocation")
 {
-    ScopedFastFlag luauCodegenX64IntSpillRestore{FFlag::LuauCodegenX64IntSpillRestore, true};
-
     options.includeRegSpills = true;
 
     IrOp entry = build.block(IrBlockKind::Internal);
@@ -878,7 +873,6 @@ bb_2:
 
 TEST_CASE_FIXTURE(IrAssemblyFixture, "ExitSyncRestoreConflictedRegisters")
 {
-    ScopedFastFlag luauCodegenExitSyncUpdate{FFlag::LuauCodegenExitSyncUpdate, true};
     ScopedFastFlag luauCodegenImprovedExitSync{FFlag::LuauCodegenImprovedExitSync, true};
 
     options.includeOutlinedCode = true;
@@ -953,7 +947,6 @@ bb_exit_1:
 
 TEST_CASE_FIXTURE(IrAssemblyFixture, "ExitSyncRestoreConflictedDependent")
 {
-    ScopedFastFlag luauCodegenExitSyncUpdate{FFlag::LuauCodegenExitSyncUpdate, true};
     ScopedFastFlag luauCodegenImprovedExitSync{FFlag::LuauCodegenImprovedExitSync, true};
 
     options.includeOutlinedCode = true;
@@ -1043,8 +1036,6 @@ bb_exit_1:
 
 TEST_CASE_FIXTURE(IrAssemblyFixture, "LazyHintNotMaterializedInsideScopedSpills")
 {
-    ScopedFastFlag luauCodegenScopedSpillKeepLazy{FFlag::LuauCodegenScopedSpillKeepLazy, true};
-
     options.includeRegSpills = true;
 
     IrOp entry = build.block(IrBlockKind::Internal);

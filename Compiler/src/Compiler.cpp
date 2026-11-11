@@ -50,6 +50,8 @@ LUAU_FASTFLAGVARIABLE(LuauExportedTypesParticipateInScc)
 LUAU_FLAGVERSION(LuauExportedTypesParticipateInScc, 3)
 LUAU_FASTFLAG(LuauExperimentalIfLocalSyntax)
 LUAU_FASTFLAGVARIABLE(LuauCompileReuseLocalRegs)
+LUAU_FASTFLAG(LuauExperimentalWhileLocalSyntax)
+LUAU_FASTFLAGVARIABLE(LuauCompileRequireNoInline)
 
 namespace Luau
 {
@@ -633,6 +635,10 @@ struct Compiler
             protoflags |= LPF_USES_EXPORT;
 
         bool isInlinable = !hasMultiRet && !getfenvUsed && !setfenvUsed;
+        // Add to line above on flag removal.
+        if (FFlag::LuauCompileRequireNoInline && hasRequire)
+            isInlinable = false;
+
         uint64_t costModel = 0;
         if (FFlag::LuauEmitCallFeedback && isInlinable && upvals.empty())
         {
@@ -691,6 +697,7 @@ struct Compiler
 
         hasLoops = false;
         hasMultiRet = false;
+        hasRequire = false;
         currentFunction = nullptr;
 
         return fid;
@@ -1387,6 +1394,12 @@ struct Compiler
         LUAU_ASSERT(!targetTop || unsigned(target + targetCount) == regTop);
 
         setDebugLine(expr); // normally compileExpr sets up line info, but compileExprCall can be called directly
+
+        if (FFlag::LuauCompileRequireNoInline && !expr->self)
+        {
+            if (AstExprGlobal* g = expr->func->as<AstExprGlobal>(); g && g->name == "require")
+                hasRequire = true;
+        }
 
         // try inlining the function
         if (options.optimizationLevel >= 2 && !expr->self)
@@ -4004,8 +4017,70 @@ struct Compiler
         }
     }
 
+    void compileStatWhileLocal(AstStatWhile* stat)
+    {
+        LUAU_ASSERT(stat->conditionLocal);
+
+        // Optimization: condition is always false => the body never runs and the binding never matters.
+        if (isConstantFalse(stat->condition))
+            return;
+
+        RegScope rs(this);
+
+        size_t oldJumps = loopJumps.size();
+        size_t oldLocals = localStack.size();
+
+        loops.push_back({oldLocals, oldLocals, nullptr});
+        hasLoops = true;
+
+        // The condition value is re-evaluated into this register on every iteration and bound to
+        // conditionLocal for the duration of the body; the register persists across iterations.
+        uint8_t reg = allocReg(stat, 1u);
+        uint32_t allocpc = bytecode.getDebugPC();
+
+        size_t loopLabel = bytecode.emitLabel();
+
+        compileExprTemp(stat->condition, reg);
+        pushLocal(stat->conditionLocal, reg, allocpc);
+
+        size_t exitJump = bytecode.emitLabel();
+        bytecode.emitAD(LOP_JUMPIFNOT, reg, 0);
+
+        compileStat(stat->body);
+
+        // Close any upvalues capturing the loop-scoped binding so each iteration observes a fresh cell,
+        // then drop the binding from the compile-time scope.
+        closeLocals(oldLocals);
+        popLocals(oldLocals);
+
+        size_t contLabel = bytecode.emitLabel();
+
+        size_t backLabel = bytecode.emitLabel();
+
+        setDebugLine(stat->condition);
+
+        // Note: JUMPBACK rather than JUMP so the loop has an interruptible instruction (see compileStatWhile).
+        bytecode.emitAD(LOP_JUMPBACK, 0, 0);
+
+        size_t endLabel = bytecode.emitLabel();
+
+        patchJump(stat, backLabel, loopLabel);
+        patchJump(stat, exitJump, endLabel);
+
+        patchLoopJumps(stat, oldJumps, endLabel, contLabel);
+        loopJumps.resize(oldJumps);
+
+        loops.pop_back();
+    }
+
     void compileStatWhile(AstStatWhile* stat)
     {
+        if (FFlag::LuauExperimentalWhileLocalSyntax && stat->conditionLocal)
+        {
+            compileStatWhileLocal(stat);
+            return;
+        }
+
         // Optimization: condition is always false => there's no loop!
         if (isConstantFalse(stat->condition))
             return;
@@ -5977,6 +6052,7 @@ struct Compiler
     size_t argCount = 0;
     bool hasLoops = false;
     bool hasMultiRet = false;
+    bool hasRequire = false;
     AstExprFunction* currentFunction = nullptr;
 
     size_t blockDepth = 0;
