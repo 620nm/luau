@@ -20,3 +20,5 @@ for index = 1, 5 do
 	sum += index
 end
 assert(sum == 15)
+
+return "OK"
